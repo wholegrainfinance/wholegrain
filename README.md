@@ -126,6 +126,48 @@ or a paid API, they are the least portable part of any such system, and most hol
 never require them. The in-house extractor handles text-native documents only. Bring your
 own OCR if you need scans.
 
+
+### Network topology
+
+Static frontends get **no route to the internet**. They serve files; the browser
+talks to the API directly, so the container itself never needs egress.
+
+```mermaid
+flowchart LR
+    net([Internet]) -- 443 --> nginx[nginx<br/>TLS termination]
+
+    subgraph edge["wholegrain-edge &nbsp;·&nbsp; internal: true &nbsp;·&nbsp; NO egress"]
+        fe[browser frontend<br/>static SPA]
+        addin[office add-in<br/>static]
+    end
+
+    subgraph routable["wholegrain-network &nbsp;·&nbsp; routable"]
+        api[backend API]
+        ing[ingesters]
+    end
+
+    nginx --> fe
+    nginx --> addin
+    nginx --> api
+    api --> ext[(Postgres · object storage · LLM API)]
+    ing --> ext
+
+    classDef sealed fill:#fff5f5,stroke:#e53e3e,stroke-width:2px
+    classDef open fill:#f0fff4,stroke:#38a169,stroke-width:2px
+    class edge sealed
+    class routable open
+```
+
+nginx is the only member of both networks, so it must be started first — it
+creates the edge network that the frontends then join as `external: true`.
+
+Why bother: a static container that cannot make outbound connections cannot
+fetch a payload. A compromise on this host used outbound HTTP to pull a
+cryptominer and reach a mining pool; on an `internal: true` network both steps
+fail, which turns a foothold into a dead end rather than merely a smaller one.
+`internal: true` still permits Docker's embedded DNS, traffic between members,
+and published host ports — so nothing legitimate breaks.
+
 ---
 
 ## Requirements
@@ -156,6 +198,9 @@ own OCR if you need scans.
   bot traffic before it reaches your VM.
 - **Keep compute and database in the same region.** A cross-region split adds ~100 ms to
   every query and will dominate your latency budget long before your hardware does.
+- **Put static frontends on an egress-free network** — see
+  [Network topology](#network-topology). A container that serves files needs no
+  outbound access, and denying it turns a compromise into a dead end.
 - Keep admin access on a VPN or bastion; do not expose management ports.
 
 ---
