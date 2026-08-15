@@ -209,6 +209,11 @@ and published host ports — so nothing legitimate breaks.
 
 ---
 
+## Reference
+
+- **[DATABASE.md](DATABASE.md)** — the schema in full: tables, relationships,
+  row-level security, search internals, index costs and known warts.
+
 ## Status
 
 Early. The ontology is in production use; the docs here describe the model rather than a
