@@ -174,8 +174,10 @@ Why bother: a static container that cannot make outbound connections cannot
 fetch a payload. A compromise on this host used outbound HTTP to pull a
 cryptominer and reach a mining pool; on an `internal: true` network both steps
 fail, which turns a foothold into a dead end rather than merely a smaller one.
-`internal: true` still permits Docker's embedded DNS, traffic between members,
-and published host ports — so nothing legitimate breaks.
+`internal: true` still permits Docker's embedded DNS and traffic between members,
+so nginx reaches the frontends normally. It does not permit published host ports:
+Docker configures no gateway on an internal network, so a `ports:` mapping on a
+member silently does nothing — those containers are reachable only through nginx.
 
 ---
 
