@@ -5,15 +5,16 @@ the frontends, extraction workers, agents — all read and write the same tables
 none of them owns private state. **The database is the contract**, which is why it
 is worth documenting properly rather than inferring from ORM models.
 
-This describes the schema as it stands in the reference deployment: 40 tables,
-57 foreign keys, 121 indexes, 15 tables under row-level security, 21 functions.
+40 tables, 21 functions, 15 tables under row-level security, 15 policies, 15
+triggers, 126 indexes, 4 extensions — created by a single migration and verified
+to build from an empty PostgreSQL 16 + pgvector.
 
 ## Contents
 
 - [Three schemas](#three-schemas) · [The domain](#the-domain-ledger) ·
   [Documents](#documents) · [Access control](#access-control-and-rls) ·
   [Search](#search) · [Operational](#operational-tables) ·
-  [Indexes](#indexes-and-what-they-cost) · [Known warts](#known-warts)
+  [Indexes](#indexes-and-what-they-cost) · [Corrections](#corrections-made-in-this-baseline)
 
 ---
 
@@ -40,21 +41,32 @@ Four tables carry the investment domain. See the [ontology](README.md#the-ontolo
 for the type vocabularies; this covers how they are wired.
 
 ```
-legal_entities ──subject_id/object_id──► transactions ──event_id──► events
+entities ──────subject_id/object_id──► transactions ──event_id──► events
        ▲                                                              │
        └──────────────── measurements ────────────────────────────────┘
                                     entity_groups (netting)
 ```
 
-**`legal_entities`** — 20 columns. Every party, asset and account: the thing you
-own, the thing you owe, the counterparty, the bank account. A **text** primary key
-(a readable slug like `acme_holding_gmbh`), not a UUID — so ledger rows are
-legible without joins. `group_id` → `entity_groups`, for netting a property
-against its mortgage.
+**`entities`** — 20 columns. Every party, asset and account: the thing you own, the
+thing you owe, the counterparty you pay, the bank account the money sits in. A
+**text** primary key (a readable slug like `acme_holding_gmbh`), not a UUID — so
+ledger rows are legible without joins. `group_id` → `entity_groups`, for netting a
+property against its mortgage.
+
+> Not `legal_entities`: a bank account, a property and a loan balance are none of
+> them legal persons, and accounts are the *most* trafficked rows here — every bank
+> transaction names one as its subject. The table holds anything a transaction can
+> point at; `type` and `structure_type` say what each one is.
+
+> **Type is what a thing is, not the part it plays.** A law firm is a
+> `service_provider`; it *acts as* a counterparty when you pay it, and as a subject
+> when it invoices. Role is already expressed by which foreign key points at the
+> row, so it must not leak into `type` — that is how a vocabulary silently drifts
+> until cross-entity reporting stops working.
 
 **`transactions`** — 21 columns. Two legs, each saying *how much* of *what unit*
 (`outflow_*` / `inflow_*`). Both `subject_id` and `object_id` are `RESTRICT`
-foreign keys into `legal_entities`, so an entity cannot be deleted while any
+foreign keys into `entities`, so an entity cannot be deleted while any
 transaction references it. `event_id` is `SET NULL` — losing the economic event
 must not destroy the cash record.
 
@@ -81,8 +93,9 @@ was not available on the managed instance.
 
 **`files`** — 140k rows. Identity is `hashcode` (SHA-256 of the original bytes),
 so moves and renames are detected and nothing re-extracts needlessly. Non-native
-files are stored **twice**: the converted PDF and the original — see
-[Known warts](#known-warts) for how confusingly those two are named.
+files are stored **twice**: `original_blob_name` holds the bytes as uploaded and
+`pdf_blob_name` the PDF rendition, so "give me the file" and "give me a PDF of
+it" are each one column.
 
 **`file_extractions`** — 148k rows, **10 GB**. One row per extraction *run*, not
 per file: re-extraction appends. `md_format` is the searchable body;
@@ -202,36 +215,37 @@ Two consequences worth internalising:
 
 ---
 
-## Known warts
+## Corrections made in this baseline
 
-Documented rather than hidden, because each is a trap for the next person.
+This schema was built from a running reference deployment, and five things were
+fixed on the way in rather than inherited. Recorded because each had already cost
+someone a day.
 
-**The two blob columns are named backwards.** For a non-native file,
-`files.blob_name` holds the **converted PDF** and `files.file_name` holds the
-**original blob key** — while `file_name` means "the human filename" nearly
-everywhere else. `pdf_hashcode IS NULL` additionally doubles as the flag for
-"this file was already a PDF". Rename to `pdf_blob_name` / `original_blob_name`.
+**The two blob columns were named backwards.** `blob_name` held the *converted
+PDF* while `file_name` held the *original blob key* — and `file_name` means "the
+human filename" everywhere else. Now `original_blob_name` and `pdf_blob_name`,
+each a direct link, and `file_name` is only ever the human filename.
 
-**Two overlapping trigram indexes** on `file_extractions.md_format` —
-`idx_file_extractions_md_trgm` (656 MB) and `idx_fe_ws_md_trgm` (620 MB) — 1.2 GB
-for what is close to the same lookup.
+**Two overlapping trigram indexes** on `file_extractions.md_format` cost 656 MB
+and 620 MB for near-identical lookups. The workspace-composite one survives.
 
-**The filename index does not match the filename query.**
-`idx_files_file_name_trgm` indexes `file_name` alone, but the search leg queries
-`coalesce(file_name, blob_name)`, so the index cannot be used.
+**The filename index could not be used.** `app.search` filtered on
+`coalesce(file_name, blob_name)`, which no index on `file_name` can serve. With
+the rename above the coalesce is unnecessary, so the filename leg finally hits
+`idx_files_file_name_trgm`.
 
-**`file_extractions` is one row per run.** Anything ranking over it must
-`GROUP BY file_id` first, or a re-extracted file occupies several result slots.
-29,098 files already carry more than one extraction, and one accumulated 309
-error rows over six weeks because nothing caps retries.
+**Two scratch tables** — `tmp_sheet_chunk_purge` (67 MB, 840k rows) and
+`_pipeline_diag` — were left over from one-off operations and still being indexed
+and backed up. Not carried over.
 
-**Scratch tables left in place** — `tmp_sheet_chunk_purge` (67 MB, 840k rows) and
-`_pipeline_diag` are leftovers from one-off operations, still indexed and still
-backed up.
+**`file_extractions` had no way to describe several extractions of one file.**
+Running a cheap extractor over everything and better ones on top is the design, so
+it gained `attempt`, `content_chars`, `cost_micros` and `extractor_version`: which
+try this was, what it achieved, what it cost, and which build produced it.
+Deliberately *no* column marks a winner — that judgement belongs to the workers,
+which is why the schema records facts rather than verdicts.
 
-**The migration history cannot rebuild the database.** Replaying it against an
-empty Postgres fails early: data migrations reference enum literals that do not
-exist yet, and some use `conn.execute()` in ways that abort the transaction. The
-live schema is reproducible only by its own accumulated history — which is the
-reason this document exists, and the reason a clean baseline is being written
-from the schema rather than from the migrations.
+One inherited property is worth stating plainly, because it is a trap rather than
+a wart: **`file_extractions` is one row per extraction run, not per file.**
+Anything ranking over it must `GROUP BY file_id` first, or a re-extracted file
+occupies several result slots.
