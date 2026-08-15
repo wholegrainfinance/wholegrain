@@ -1,4 +1,8 @@
-# Wholegrain Finance — Investment Ontology
+<p align="center">
+  <img src="assets/logo.png" alt="Wholegrain Finance" width="88">
+</p>
+
+<h1 align="center">Wholegrain Finance — Investment Ontology</h1>
 
 **An open-source data model and toolkit for investment holdings, funds and family offices.**
 
