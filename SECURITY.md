@@ -40,8 +40,11 @@ payload fetch fails outright — no DNS to the internet, no route to a mining po
 nginx is the only member of both, so it must start first; it creates the edge
 network the frontends then join.
 
-`internal: true` still permits Docker's embedded DNS, traffic between members and
-published host ports, so nothing legitimate breaks.
+`internal: true` still permits Docker's embedded DNS and traffic between members,
+so nginx reaches the frontends normally. It does **not** permit published host
+ports — Docker configures no gateway on an internal network, so a `ports:`
+mapping on a member silently does nothing. That is the intended shape: those
+containers are reachable only through nginx.
 
 **Resource limits.** Every service has `mem_limit` and `cpus`. A miner that cannot
 take the whole box is both less damaging and more visible — in the incident it was
