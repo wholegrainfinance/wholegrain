@@ -218,6 +218,8 @@ and published host ports — so nothing legitimate breaks.
 
 - **[DATABASE.md](DATABASE.md)** — the schema in full: tables, relationships,
   row-level security, search internals, index costs and known warts.
+- **[SECURITY.md](SECURITY.md)** — what the shipped configuration hardens, what
+  it deliberately does not, and why each control exists.
 
 ## Status
 
