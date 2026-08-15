@@ -22,15 +22,20 @@ Four tables carry the whole domain. Every module reads and writes these; nothing
 load-bearing.
 
 ```
-legal_entities ──subject/object── transactions ──event_id── events
+entities ──────subject/object── transactions ──event_id── events
        │                                                      │
        └──────────────── measurements ────────────────────────┘
 ```
 
-### `legal_entities`
+### `entities`
 
 Every party, asset and account is a row here — the thing you own, the thing you owe, the
 counterparty you pay, and the bank account the money sits in.
+
+Not `legal_entities`: a bank account, a property and a loan balance are none of them
+legal persons, and accounts are the most trafficked rows of all — every bank
+transaction names one as its subject. The table holds whatever a transaction can
+point at; `type` and `structure_type` say what each one is.
 
 | `type` | |
 |---|---|
@@ -49,7 +54,7 @@ counterparty you pay, and the bank account the money sits in.
 `structure_type` is orthogonal and has exactly two values: **`holding`** (a vehicle you
 own things *through*) and **`asset`** (a thing you own).
 
-> **Model bank accounts as entities.** A cash account is a first-class `legal_entity`, not
+> **Model bank accounts as entities.** A cash account is a first-class `entities` row, not
 > a field on a transaction. That is what lets a payment name *which* account it moved on,
 > and lets you reconcile per account against a statement.
 
