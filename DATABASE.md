@@ -108,6 +108,34 @@ plus a 1536-dimension embedding, tied to the extraction that produced it.
 **`key_value_pairs`** — 353k rows. Labelled facts (doctype, summary, readability)
 with a `kvp_status` lifecycle from machine-extracted to human-validated.
 
+### Controlled vocabularies
+
+`entities.type`, `events.type`, `transactions.type` and both unit fields are
+enforced by `CHECK` constraints, not by convention. Adding a value is therefore a
+migration — which is the point: a new category becomes a decision someone
+reviews, instead of appearing the first time a caller misspells one.
+
+Three kinds of value are deliberately excluded, because none of them is a *type*:
+
+| Not a type | Where it goes |
+|---|---|
+| **role** — a law firm *is* a `service_provider`, it *acts as* a counterparty | which FK points at the row |
+| **rail** — wire, SEPA, card: how money moved, not why | `add_data.rail` |
+| **firm-specific label** | `transactions.classification` |
+
+The reference deployment shows what happens without this: 68% of its entity rows
+are off-vocabulary, and `counterparty` — a role — is the single most common value
+at 64%.
+
+**`NULL` passes every constraint, on purpose.** A row may exist before it has been
+classified. `other` means "classified, and none of these fit"; `NULL` means "not
+classified yet". Keeping them apart is what makes an unclassified backlog
+countable.
+
+`entities.type` has no `other` at all, unlike events: an entity fitting none of
+eleven options is usually a modelling mistake, and it is cheaper to catch at
+insert time than to find later in a report.
+
 ---
 
 ## Access control and RLS

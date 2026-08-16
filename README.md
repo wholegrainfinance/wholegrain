@@ -63,8 +63,17 @@ own things *through*) and **`asset`** (a thing you own).
 The economic thing that happened. One event can own several transactions — that is how a
 single investment ties its cash leg to its share leg.
 
-`capital_call` · `investment` · `distribution` · `exit` · `commitment` · `valuation` ·
-`reporting` · `governance` · `external_financing` · `dividend` · `invoice` · `other`
+`investment` · `divestment` · `capital_call` · `distribution` · `exit` ·
+`commitment` · `valuation` · `reporting` · `governance` · `financing_round` ·
+`news` · `general_information` · `other`
+
+`exit` is the *company's* liquidity event — trade sale, IPO, the whole cap table
+exits together. `divestment` is *you* selling out of a position that continues
+without you. Likewise `financing_round` is the company's event and `investment`
+is your participation in it: one round can carry several of your investments
+across vehicles.
+
+`news` and `general_information` carry no money and no transactions.
 
 ### `transactions`
 
@@ -90,9 +99,38 @@ inflow_amount  / inflow_type  / inflow_reporting_amount    ← what was received
 `*_reporting_amount` is the same leg normalised to your reporting currency. It is null on
 a leg that has no monetary value, such as shares or a service.
 
-`type` records **why**, not **how**: `investment`, `capital_call`, `distribution`, `exit`,
-`invoice`, `fee`, `dividend`, `interest`, `transfer`, `commitment`, `write_off`,
-`conversion`, `valuation`. The payment rail (wire, SEPA, card) belongs in `add_data`.
+`type` records **why**, not **how**:
+
+`investment` · `divestment` · `capital_call` · `distribution` · `exit` ·
+`commitment` · `invoice` · `fee` · `dividend` · `interest` · `transfer` ·
+`conversion` · `other`
+
+The payment rail (wire, SEPA, card) belongs in `add_data.rail`; a firm's own
+label belongs in `classification`.
+
+**A transaction is an exchange — if nothing changes hands it is not one.** That is
+why there is no `write_off` and no `valuation`: an asset going to zero moves no
+money, so it is a `fair_value` measurement with a `valuation` event.
+`conversion` stays for the opposite reason — a SAFE converting to equity gives up
+the note and receives shares.
+
+**Units.** A leg is measured in an ISO-4217 currency, or in an instrument:
+
+| | |
+|---|---|
+| equity | `common` `preferred` `series_seed` `series_a` `series_a1` … |
+| derivative | `safe` `convertible_note` `warrant` `option` |
+| fund | `fund_interest` `carry_interest` |
+| other | `loan` `crypto` `service` `cash` `other` |
+
+Equity classes stay **granular on purpose**: liquidation seniority is by class, so
+collapsing them to one `equity` value would make a waterfall uncomputable. Class
+gives the default ordering only — the negotiated terms (multiple, participating,
+explicit rank, pari passu peers) are per deal and live in `add_data.liq_pref`.
+
+`capital_account` is deliberately *not* a unit: it is the balance of a fund
+position, not a thing that changes hands. The position is `fund_interest`; its
+balance is a measurement.
 
 ### `measurements`
 
