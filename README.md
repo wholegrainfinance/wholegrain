@@ -268,4 +268,4 @@ packaged release. Issues and discussion welcome.
 
 ## License
 
-To be decided before the first module is published — likely Apache 2.0.
+[Apache 2.0](LICENSE).
