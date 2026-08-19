@@ -164,6 +164,7 @@ drifts until reporting across entities stops working.
 | **API** | REST over the ontology, auth, workspace isolation |
 | **Frontend** | Ledger views, search, dashboards |
 | **nginx** | TLS termination and reverse proxy |
+| **Database** | PostgreSQL with pgvector and the extensions the schema needs, plus backup and restore |
 | Lightweight extraction | Text-native documents (PDF text layer, Office, email) — in-house |
 | Search | Hybrid lexical + vector retrieval over extracted text |
 | Agents | Propose rows from documents for human review |
@@ -230,7 +231,8 @@ member silently does nothing — those containers are reachable only through ngi
 ## Install
 
 1. Clone the modules you want: **API**, **frontend**, **nginx**
-2. Provision managed PostgreSQL
+2. Provision PostgreSQL — either a managed server, or the **database** module,
+   which brings the required extensions with it
 3. Provision managed object storage (blob/S3)
 4. Obtain an LLM API key, if using the agent modules
 5. Fill in the `.env` files for each module
