@@ -230,14 +230,22 @@ member silently does nothing — those containers are reachable only through ngi
 
 ## Install
 
-1. Clone the modules you want: **API**, **frontend**, **nginx**
-2. Provision PostgreSQL — either a managed server, or the **database** module,
-   which brings the required extensions with it
-3. Provision managed object storage (blob/S3)
-4. Obtain an LLM API key, if using the agent modules
-5. Fill in the `.env` files for each module
-6. `docker compose up -d`
-7. Apply the hardening below — do not skip it
+**[DEPLOYMENT.md](DEPLOYMENT.md) is the full walkthrough** — the steps below are
+the shape of it. Several of them are circular if taken in the wrong order, and a
+few failure modes are silent, so it is worth following rather than improvising.
+
+1. Clone the modules you want: **nginx**, **database**, **API**, **frontend**
+2. Point two DNS names at the host — one for the API, one for the dashboard
+3. Issue certificates, one per host, with port 80 free
+4. Bring up **nginx** first: it creates the egress-free network the frontends join
+5. Provision PostgreSQL — a managed server, or the **database** module, which
+   brings the required extensions with it
+6. Run migrations as the database **owner**
+7. **Create the RLS login roles** and point the API at `app_api`, *not* the owner
+   — an owner bypasses row-level security, and nothing about that looks wrong
+8. Provision object storage, and choose a bucket layout
+9. Fill in the `.env` files, `docker compose up -d`, register the first account
+10. Apply the hardening below — do not skip it
 
 ## Hardening
 
@@ -258,6 +266,9 @@ member silently does nothing — those containers are reachable only through ngi
 
 ## Reference
 
+- **[DEPLOYMENT.md](DEPLOYMENT.md)** — a first deployment end to end: ordering,
+  certificates, tenant isolation, storage layout, and the failure modes that are
+  silent.
 - **[DATABASE.md](DATABASE.md)** — the schema in full: tables, relationships,
   row-level security, search internals, index costs and known warts.
 - **[SECURITY.md](SECURITY.md)** — what the shipped configuration hardens, what
