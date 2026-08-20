@@ -32,14 +32,20 @@ Four of these steps depend on an earlier one in a way that is not obvious until
 it fails:
 
 ```
-1. DNS ─────────────────► must resolve before certbot will issue
-2. certificates ────────► must exist before nginx will start
-3. nginx ───────────────► creates wholegrain-edge, which the frontend joins
-4. database ────────────► must be healthy before migrations
-5. migrations ──────────► must run before the RLS roles can be granted
-6. RLS login roles ─────► must exist before the API can connect as app_api
-7. API, then frontend
+ 1. DNS ─────────────────► must resolve before certbot will issue
+ 2. certificates ────────► must exist before nginx will start
+ 3. nginx ───────────────► creates wholegrain-edge, which the frontend joins
+ 4. database ────────────► must be healthy before migrations
+ 5. migrations ──────────► must run before the RLS roles can be granted
+ 6. RLS login roles ─────► must exist before the API can connect as app_api
+ 7. API, then frontend
+ 8. first account ───────► register over HTTP; nothing special about it
+ 9. first admin ─────────► SQL, once: role assignment is itself admin-only
+10. workspace members ──► SQL: only a workspace's creator gets a membership row
 ```
+
+Steps 9 and 10 are the only ones that touch the database by hand, and 9 is a
+genuine chicken-and-egg rather than an omission.
 
 ### 1. Clone the modules
 
@@ -144,7 +150,7 @@ means recreating the container, not rebuilding it.
 
 ### 9. Create the first account
 
-Self-registration is open by default; the first account is not special.
+Self-registration is open by default, and the first account is not special:
 
 ```sh
 curl -X POST https://$API_DOMAIN/auth/register-user \
@@ -152,7 +158,80 @@ curl -X POST https://$API_DOMAIN/auth/register-user \
      -d '{"email":"you@example.com","password":"..."}'
 ```
 
+**⚠︎ Registration is ungated.** Anyone who can reach the API can create an
+account. They land in no workspace and therefore see nothing, but if that is not
+acceptable, put the API behind an allowlist before it is public.
+
 Then create a workspace, and you have a working install.
+
+### 10. Bootstrap the first admin — the one step that needs SQL
+
+Role assignment is an admin-only endpoint, so the first admin cannot be made
+through it: no `admin` role exists, nobody holds it, and `/roles/roles/assign`
+refuses everyone. Break the cycle once, directly in the database, and everything
+after this is API-only.
+
+Run as the database **owner**, substituting the email you registered above:
+
+```sql
+-- 1. The role. Role rows are created on demand by the API later, but the FIRST
+--    one has to exist before anyone can hold it.
+INSERT INTO roles (id, name)
+SELECT gen_random_uuid(), 'admin'
+WHERE NOT EXISTS (SELECT 1 FROM roles WHERE name = 'admin');
+
+-- 2. Grant it to the first account.
+INSERT INTO user_roles (user_id, role_id)
+SELECT u.id, r.id
+FROM users u, roles r
+WHERE u.email = 'you@example.com'          -- <-- your registered address
+  AND r.name  = 'admin'
+ON CONFLICT DO NOTHING;
+```
+
+Both statements are idempotent, so re-running them is safe.
+
+Confirm, then never touch `roles` by hand again:
+
+```sh
+curl -s https://$API_DOMAIN/roles/roles/me -H "Authorization: Bearer $TOKEN"
+# {"roles":["default","admin"], ...}
+```
+
+From here every further role is an API call — the endpoint creates unknown role
+rows itself:
+
+```sh
+curl -X POST https://$API_DOMAIN/roles/roles/assign \
+     -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+     -d '{"user_email":"colleague@example.com","roles":["admin"]}'
+```
+
+Note the doubled segment: `/roles/roles/assign`, not `/roles/assign`.
+
+### 11. Adding people to a workspace
+
+Also SQL today. A `user_workspaces` row is written only for the account that
+*creates* a workspace, and no endpoint adds a second member — so a colleague
+either creates their own workspace, or you grant membership directly:
+
+```sql
+INSERT INTO user_workspaces (id, user_id, workspace_id, role)
+SELECT gen_random_uuid(), u.id, w.id, 'member'      -- 'owner' | 'member'
+FROM users u, workspaces w
+WHERE u.email = 'colleague@example.com'
+  AND w.name  = 'Your Workspace'
+ON CONFLICT DO NOTHING;
+```
+
+Membership is precisely what RLS resolves — `app.tenant_visible()` looks the user
+up in `user_workspaces` — so the new member can read the workspace immediately,
+with no restart and no cache to clear.
+
+One rule the database enforces for you: a user holding the `external` role
+cannot be made a workspace member. The `trg_user_workspaces_no_external` trigger
+rejects the insert and tells you to grant dataroom folders instead. External
+users are dataroom guests; they are not tenants.
 
 ---
 

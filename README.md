@@ -245,7 +245,10 @@ few failure modes are silent, so it is worth following rather than improvising.
    — an owner bypasses row-level security, and nothing about that looks wrong
 8. Provision object storage, and choose a bucket layout
 9. Fill in the `.env` files, `docker compose up -d`, register the first account
-10. Apply the hardening below — do not skip it
+10. Bootstrap the first admin with two SQL statements — role assignment is itself
+    admin-only, so it cannot be done through the API until someone holds the role.
+    Everything after that is API-only
+11. Apply the hardening below — do not skip it
 
 ## Hardening
 
