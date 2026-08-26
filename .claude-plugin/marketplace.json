@@ -1,0 +1,15 @@
+{
+  "name": "wholegrain",
+  "description": "Claude Code plugins for Wholegrain — the open-source investment ontology for holdings, funds and family offices.",
+  "owner": { "name": "Wholegrain" },
+  "plugins": [
+    {
+      "name": "wholegrain",
+      "description": "Query a Wholegrain workspace from Claude — entities, events, transactions, measurements and the documents they were extracted from. Read-only.",
+      "author": { "name": "Wholegrain" },
+      "category": "data",
+      "source": "./claude-plugin",
+      "homepage": "https://github.com/wholegrainfinance/wholegrain"
+    }
+  ]
+}

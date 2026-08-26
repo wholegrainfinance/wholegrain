@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "wholegrain": {
+      "type": "http",
+      "url": "${WHOLEGRAIN_MCP_URL}"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "wholegrain",
+  "description": "Query a Wholegrain workspace from Claude — entities, events, transactions, measurements and the documents they were extracted from. Read-only.",
+  "version": "0.1.0",
+  "keywords": ["wholegrain", "investment", "portfolio", "family-office", "mcp"]
+}
