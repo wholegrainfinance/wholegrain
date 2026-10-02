@@ -5,7 +5,7 @@
   "plugins": [
     {
       "name": "wholegrain",
-      "description": "Query a Wholegrain workspace from Claude — entities, events, transactions, measurements and the documents they were extracted from. Read-only.",
+      "description": "Query a Wholegrain workspace from Claude — entities, events, transactions, measurements and the documents they were extracted from — and coordinate work on it through a narrow set of attributed writes.",
       "author": { "name": "Wholegrain" },
       "category": "data",
       "source": "./claude-plugin",

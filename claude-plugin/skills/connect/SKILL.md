@@ -69,5 +69,9 @@ different one that happens to be configured.
 | `401` that never resolves | the workspace id in the URL is not one this account can reach |
 | `421` | the API is being reached on a hostname missing from `MCP_EXTRA_ALLOWED_HOSTS` server-side |
 | Tools present, every query empty | connected to the wrong workspace — check `get_workspace_info` |
+| `403 Your role may not …` on a write tool | the account's role lacks that permission; reads still work |
 
-All tools are **read-only**. Nothing in this plugin can modify a workspace.
+Most tools read. The write tools (`create_process`, `update_process_stage`,
+`update_task_status`, `assign_to_process`, `add_request`, `call_api`) each need a
+`reason`, are checked against the connected account's role, land on the audit
+trail with channel `mcp`, and cannot delete anything. Connecting does not write.
