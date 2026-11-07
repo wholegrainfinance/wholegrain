@@ -308,9 +308,9 @@ filter on it where you read it.
                                                              │ + document blobs
                      ┌───────────────────────────────────────┴─────────────────────────┐
                      │  DOCUMENT INGESTION & EXTRACTION — one of:                       │
-                     │   (a) the built-in pipeline image: sync → extract → label →      │
-                     │       chunk/embed                                                │
-                     │   (b) an external document service of your own                   │
+                     │   (a) the reference document service: sync · ingesters ·         │
+                     │       extraction · chunk/embed                                   │
+                     │   (b) a document service of your own                             │
                      └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -339,12 +339,12 @@ filter on it where you read it.
 **Document ingestion and extraction are deliberately outside the core**, and can be
 either of two things:
 
-- **(a) The built-in pipeline image** (`Dockerfile.pipeline` in the backend repo). A
-  batch job, not a service: it mirrors a directory tree into `folders`/`files` and
-  object storage, extracts text into `file_extractions` (Docling), labels documents,
-  and builds search chunks and embeddings in `file_chunks`. Run it on demand or from
-  cron.
-- **(b) An external document service** that writes into the same tables — `folders`,
+- **(a) The reference document service** (the `sync`, `ingester` and `extraction`
+  repositories). It mirrors a directory tree into `folders`/`files` and object
+  storage, pulls mail, messages and cloud folders as configured in the `connectors`
+  table, extracts text into `file_extractions` (PyMuPDF, Docling, OCR), and builds
+  search chunks and embeddings in `file_chunks`.
+- **(b) A document service of your own** that writes into the same tables — `folders`,
   `files`, `file_extractions` (and `tasks`, one per ingested email or message) — and
   into the same object-storage layout. Use this when extraction needs GPUs, a paid OCR
   API or connectors that do not belong in your core install.
@@ -412,8 +412,8 @@ private.
 
 | Repository | What it is | Read first |
 |---|---|---|
-| [`backend`](https://github.com/wholegrainfinance/backend) | FastAPI API: auth, workspaces, the ontology CRUD/query/bulk surface, RBAC, hybrid search, MCP server, feature modules (portfolio, mirror, …). Alembic migrations, the RLS role setup, and the optional pipeline image. | `docs/ARCHITECTURE.md` · `docs/DATABASE_SCHEMA.md` · `docs/FRONTEND_ONTOLOGY_API.md` · `docs/FRONTEND_MEASUREMENTS_API.md` · `docs/FRONTEND_TASKS_API.md` · `docs/RETRIEVAL.md` · `docs/DB_ROLES_AND_RLS.md` · `docs/MIRROR.md` |
-| [`browser-frontend`](https://github.com/wholegrainfinance/browser-frontend) | React/Vite dashboard: ledger views, holdings, organigram, tasks and request lists, document explorer, search. Static build, configured at container start. | `docs/HOLDINGS_HANDBOOK.md` — how every holdings figure is computed |
+| [`backend`](https://github.com/wholegrainfinance/backend) | FastAPI API: auth, workspaces, the ontology CRUD/query/bulk surface, RBAC, hybrid search, MCP server, feature modules (portfolio, mirror, …). Alembic migrations, the RLS role setup, the secret store and its `tools.secrets` CLI, connectors and Wholegrain's own provider apps. | `docs/ARCHITECTURE.md` · `docs/DATABASE_SCHEMA.md` · `docs/FRONTEND_ONTOLOGY_API.md` · `docs/FRONTEND_MEASUREMENTS_API.md` · `docs/FRONTEND_TASKS_API.md` · `docs/RETRIEVAL.md` · `docs/DB_ROLES_AND_RLS.md` · `docs/MIRROR.md` |
+| [`frontend`](https://github.com/wholegrainfinance/frontend) | React/Vite dashboard: ledger views, holdings, organigram, tasks and request lists, document explorer, search. Static build, configured at container start. | `docs/HOLDINGS_HANDBOOK.md` — how every holdings figure is computed |
 | [`nginx`](https://github.com/wholegrainfinance/nginx) | TLS termination and reverse proxy. Domains and upstreams come from `.env` and are rendered into vhost templates at start; creates the egress-free `wholegrain-edge` network. | `README.md` |
 | [`cli`](https://github.com/wholegrainfinance/cli) | `wholegrain` command line over the whole API, generated from OpenAPI at runtime; read lane (`sql`) and write lane (`call`), token refresh, workspace mirror client. Standard library only. | `README.md` |
 | [`agents`](https://github.com/wholegrainfinance/agents) | Agents that write ontology rows: `ontology-writer` (ingested email/message → proposed entities, events, transactions, measurements, behind a deterministic gate) and a `qa` agent. | `README.md` |
@@ -435,23 +435,26 @@ private.
 the shape of it. Several of them are circular if taken in the wrong order, and a
 few failure modes are silent, so it is worth following rather than improvising.
 
-1. Clone the modules you want: **nginx**, **backend**, **browser-frontend**, and
+1. Clone the modules you want: **nginx**, **backend**, **frontend**, and
    **database** if you are not using a managed server
 2. Point two DNS names at the host — one for the API, one for the dashboard
 3. Issue certificates, one per host, with port 80 free
 4. Create the shared `wholegrain-network`, then bring up **nginx**: it creates the
    egress-free network the frontends join
 5. Provision PostgreSQL — a managed server, or the **database** module
-6. Run the migrations as the database **owner** (the backend container does this on
-   start; the first time, do it once by hand)
+6. Run the first two migrations as the database **owner** — up to `0002`, not
+   further
 7. **Create the RLS login roles** and point the API at `app_api`, *not* the owner
-   — an owner bypasses row-level security, and nothing about that looks wrong
+   — an owner bypasses row-level security, and nothing about that looks wrong.
+   The roles must exist before the remaining migrations run: those grant to them
+   only if they exist
 8. Provision object storage, and choose a bucket layout — it is fixed at install
 9. Fill in the `.env` files, start backend and frontend, register the first account
 10. Bootstrap the first admin with one SQL statement — role assignment is itself
     admin-only, so it cannot be done through the API until someone holds the role.
     Everything after that is API-only
-11. Optionally add document ingestion: the pipeline image, or your own service
+11. Optionally set up the secret store, connectors and Microsoft 365, and add
+    document ingestion: the reference document service, or your own
 12. Apply the hardening below — do not skip it
 
 ## Hardening

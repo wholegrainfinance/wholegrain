@@ -3,6 +3,10 @@
 A first deployment from nothing to a working, TLS-terminated, tenant-isolated
 install. Roughly an hour, most of it waiting for images to build.
 
+_Last walked through end to end on 2026-11-07, against an empty PostgreSQL at
+backend migration `0059`: migrations, login roles, API start, first account,
+workspace, first admin and the fail-closed check below._
+
 This document is opinionated about the order of steps, because several of them
 are circular if taken in the wrong one, and about a handful of failure modes that
 are silent — the kind where everything looks correct and something important is
@@ -33,7 +37,7 @@ editing `.env` and recreating the container, not rebuilding it.
 
 ## Order of operations
 
-Five of these steps depend on an earlier one in a way that is not obvious until
+Six of these steps depend on an earlier one in a way that is not obvious until
 it fails:
 
 ```
@@ -42,12 +46,13 @@ it fails:
  3. wholegrain-network ──► nginx, database and frontend join it as external
  4. nginx ───────────────► creates wholegrain-edge, which the frontend joins
  5. database ────────────► must be healthy before migrations
- 6. migrations ──────────► must run before the RLS roles can be granted
- 7. RLS login roles ─────► must exist before the API can connect as app_api
- 8. API, then frontend   (the API re-runs migrations on every start)
+ 6. migrations to 0002 ──► create the schemas the login roles are granted on
+ 7. RLS login roles ─────► must exist BEFORE the remaining migrations run
+ 8. API, then frontend   (the API runs the remaining migrations, and on every start)
  9. first account ───────► register over HTTP; nothing special about it
 10. first admin ─────────► SQL, once: role assignment is itself admin-only
-11. document ingestion ──► optional: the pipeline image, or your own service
+11. connector secrets ───► optional: credentials for mail, SharePoint, Microsoft 365
+12. document ingestion ──► optional: your own service, or the document-service modules
 ```
 
 Step 10 is the only one that touches the database by hand after setup, and it
@@ -59,7 +64,7 @@ is a genuine chicken-and-egg rather than an omission.
 git clone https://github.com/wholegrainfinance/nginx.git
 git clone https://github.com/wholegrainfinance/database.git      # optional: or a managed server
 git clone https://github.com/wholegrainfinance/backend.git
-git clone https://github.com/wholegrainfinance/browser-frontend.git
+git clone https://github.com/wholegrainfinance/frontend.git
 git clone https://github.com/wholegrainfinance/cli.git           # optional
 ```
 
@@ -159,14 +164,24 @@ created. Nothing else changes: the API and the pipeline take a connection URL,
 and a managed server is just a different host in it. Keep it in the same region
 as the host and reachable only from it (see the [README](README.md#hardening)).
 
-### 7. Migrations
+### 7. The first two migrations
 
 ```sh
 cd backend && cp .env.example .env
 #   DATABASE_URL           -> the OWNER role for now (app_api does not exist yet)
 #   MIGRATION_DATABASE_URL -> the OWNER role
-docker compose run --rm wholegrain-backend alembic upgrade heads
+docker compose run --rm wholegrain-backend alembic upgrade 0002_create_app_trusted_role
 ```
+
+**⚠︎ Only up to `0002`, not `heads`.** `0001` creates the schemas and `0002` the
+`app_trusted` group; the login roles of the next step are granted on both. Every
+migration after that grants its new tables to `app_api`, `app_worker` and
+`app_sql_ro`, and often narrows them again (append-only tables lose `DELETE`) —
+but only *if the role already exists*, because a migration cannot invent a
+password. Run all migrations first and every one of those statements is
+skipped without an error: the document service cannot read its connectors,
+`app_api` may delete rows that are meant to be permanent, and ad-hoc SQL fails
+with `permission denied to set role "app_sql_ro"`.
 
 Migrations run as the database **owner**. The application will not. The
 migration connection is resolved in this order: `MIGRATION_DATABASE_URL`, then
@@ -178,11 +193,11 @@ where the API user *is* the owner.
 may carry its own chain, so there can legitimately be more than one head. With
 `head` the command refuses as soon as that happens.
 
-From here on you never run this by hand again: **the backend container runs
-`alembic upgrade heads` on every start**, before it starts serving. Upgrading is
-pulling the new code and recreating the container. That also means a migration
-that fails stops the API from starting — read the container log, not the
-browser, when an upgrade "does nothing".
+The remaining migrations run in step 9, and from then on you never run them by
+hand: **the backend container runs `alembic upgrade heads` on every start**,
+before it starts serving. Upgrading is pulling the new code and recreating the
+container. That also means a migration that fails stops the API from starting —
+read the container log, not the browser, when an upgrade "does nothing".
 
 ### 8. Create the RLS login roles
 
@@ -192,23 +207,18 @@ psql "$OWNER_URL" -v ON_ERROR_STOP=1 \
      -f backend/db/sql/rls_roles_setup.sql
 ```
 
-The script is idempotent; re-running it re-applies the passwords, so it doubles
-as the rotation path. It creates `app_api` (the API, subject to RLS) and
-`app_worker` (the pipeline, bypasses RLS through `app_trusted`), and grants both
-what they need in the `public` and `app` schemas.
+It creates `app_api` (the API, subject to RLS) and `app_worker` (the document
+service, bypasses RLS through `app_trusted`), and grants both what they need in
+the `public` and `app` schemas. Everything later — `app_sql_ro` for `app_api`
+(the read-only role behind `POST /query/sql`, `wholegrain sql` and the MCP
+`run_sql` tool), the connector tables for `app_worker`, the narrowed grants on
+append-only tables — the remaining migrations add in step 9, because the roles
+now exist.
 
-**⚠︎ Then, once, as the owner:**
-
-```sql
-GRANT app_sql_ro TO app_api;
-```
-
-`app_sql_ro` is the read-only role `POST /query/sql` switches into (it backs
-`wholegrain sql` and the MCP `run_sql` tool). Its migration grants it to
-`app_api` only *if `app_api` already exists* — and on a fresh install it does
-not, because the roles are created after the migrations. Nothing fails at
-startup; ad-hoc SQL fails later with `permission denied to set role
-"app_sql_ro"`. The grant is idempotent.
+**⚠︎ Run it once, and never again on a database in use** — not even to rotate a
+password. Its blanket grants re-open every table a later migration narrowed.
+Rotate with `ALTER ROLE app_api WITH PASSWORD '...'` (and the same for
+`app_worker`).
 
 Then point the API at the scoped role, keeping the owner for migrations:
 
@@ -223,8 +233,8 @@ take.** See [Tenant isolation](#tenant-isolation-read-this-one).
 ### 9. API, then frontend
 
 ```sh
-cd backend          && docker compose up -d --build
-cd browser-frontend && cp .env.example .env && docker compose up -d --build
+cd backend  && docker compose up -d --build      # runs migrations 0003 … head first
+cd frontend && cp .env.example .env && docker compose up -d --build
 ```
 
 The rest of the backend's `.env` is grouped by concern in `.env.example`:
@@ -232,7 +242,7 @@ The rest of the backend's `.env` is grouped by concern in `.env.example`:
 and the OAuth issuer, `APP_BASE_URL` the dashboard, `CORS_ORIGINS` the browser
 origins allowed); the MCP / OAuth signing keypair; transactional mail
 (`EMAIL_PROVIDER=console` until you configure SMTP or Graph); storage (below);
-and the optional embeddings provider.
+the secret store (step 13); and the optional embeddings provider.
 
 **⚠︎ `OAUTH_RS256_PRIVATE_KEY` empty** makes the API generate a throwaway key
 per process — fine in development, and in production it silently invalidates
@@ -338,44 +348,77 @@ One rule the database enforces for you: a user holding the `external` role
 cannot be made a workspace member. A trigger rejects the insert. External users
 are dataroom guests, granted folders; they are not tenants.
 
-### 13. Document ingestion (optional)
+### 13. Connector secrets and Microsoft 365 (optional)
+
+A **connector** is one source or target per workspace — a mailbox, a SharePoint
+site, a cloud folder — kept in the `connectors` table and managed under
+*Settings → Connectors* or `POST /connectors/{workspace_id}`. Its credentials
+never go into that table, into `.env` or into git: they live in the **secret
+store**, chosen by `SECRET_STORE_BACKEND`:
+
+| backend | where the values are | needs |
+|---|---|---|
+| `db` (default) | the `connector_secrets` table, envelope-encrypted | `SECRET_KEK` — base64 of 32 random bytes |
+| `azure_vault` | Azure Key Vault, through the host's managed identity | `AZURE_VAULT_URL`, no secret in the env |
+
+**⚠︎ `SECRET_KEK` is the only key to every stored credential.** Generate it once
+(the command is in `.env.example`) and back it up outside the host. A lost KEK
+cannot be recovered: every connector credential has to be provisioned again. A
+document-service container that reads credentials needs the same KEK.
+
+Values are written with the secrets tool, inside the backend container. It asks
+for the value twice without echoing it, stores only that, and writes an audit
+row; it has no delete and never prints a value back:
+
+```sh
+docker exec -it wholegrain-backend python -m tools.secrets list
+docker exec -it wholegrain-backend python -m tools.secrets set <namespace> <workspace_id> --by you@example.com
+docker exec -it wholegrain-backend python -m tools.secrets check <namespace> <workspace_id>
+```
+
+**Microsoft 365 through your own app.** Instead of an app registration in every
+client's tenant, an install can own one multi-tenant Microsoft app; a client
+then connects an account under *Settings → Connectors → Apps*, and SharePoint
+connectors read as that account (read-only). The refresh token stays in the
+secret store; the browser never sees a token. To set it up, in the Entra tenant
+that should own the app:
+
+1. *App registrations → New registration*: accounts in **any organizational
+   directory (multitenant)**; redirect URI of type **Web**:
+   `<PUBLIC_BASE_URL>/apps/microsoft/callback`.
+2. *API permissions → Microsoft Graph → Delegated*: `openid`, `profile`, `email`,
+   `offline_access`, `User.Read`, `Mail.Read.Shared`, `Sites.Read.All`. All of
+   them read-only; no admin consent needed in your own tenant.
+3. *Certificates & secrets → New client secret*, and store it — not in `.env`:
+   `docker exec -it wholegrain-backend python -m tools.secrets set-app microsoft --by you@example.com`
+4. `MICROSOFT_APP_CLIENT_ID=<application (client) id>` in the backend `.env`,
+   then recreate the container. `GET /apps` now reports `"configured": true`.
+
+Delegated access sees exactly what the signed-in account sees. Have each client
+sign in with a service account that can open only the shared mailbox and the
+sites you should read, not with a person's own account.
+
+### 14. Document ingestion (optional)
 
 The core install has documents as soon as people upload them through the
 dashboard. Bulk ingestion — mirroring a document tree, extracting text, building
-search chunks — is a separate concern, and you choose how to provide it.
-
-**The built-in pipeline image.** `Dockerfile.pipeline` in the backend repo builds
-a batch job (not a service) that runs one pass of sync → extract → label →
-chunk/embed and exits:
+search chunks — is a separate service, outside the backend:
 
 - *sync* mirrors a directory tree into `folders` / `files` and object storage.
   The first directory level is the workspace. Identity is the SHA-256 of the
   bytes, so moves and renames are detected and nothing is re-extracted needlessly.
-- *extract* runs Docling over files marked extractable and writes
-  `file_extractions`.
-- *label* classifies documents into `key_value_pairs` (optional, needs an LLM).
+- *ingesters* pull mail (Microsoft Graph, mail exports on disk), WhatsApp
+  messages and cloud folders, driven by the `connectors` table.
+- *extract* turns files marked extractable into `file_extractions` (PyMuPDF,
+  Docling, OCR).
 - *chunk/embed* writes `file_chunks` with embeddings for vector search
   (optional; without it search is lexical-only).
 
-Its `.env` (`pipeline/.env.example`) connects as **`app_worker`**, names the
-same storage backend and bucket mode as the API, the root of the document tree
-(`SYNC_CLIENT_ROOT`, mounted into the container) and the user id that synced rows
-are attributed to. Build it once, then run a pass on demand or from host cron:
-
-```sh
-cd backend
-docker build -f Dockerfile.pipeline -t wholegrain-pipeline .
-docker run --rm --network wholegrain-network --env-file pipeline/.env \
-       -v "$DOCUMENT_TREE:$SYNC_CLIENT_ROOT:ro" wholegrain-pipeline
-```
-
-If you drive the stack from one compose file, give the pipeline a
-[profile](https://docs.docker.com/compose/how-tos/profiles/) so that
-`docker compose up` does not start it and `docker compose --profile pipeline run
---rm <service>` runs one pass.
-
-The image carries Docling, LibreOffice and baked models; it does not fit a small
-host.
+The reference implementation is the `sync`, `ingester` and `extraction`
+repositories (ask for access). They connect as **`app_worker`** and must use the
+same storage backend and bucket mode as the API. Extraction carries Docling,
+LibreOffice and OCR models and does not fit a small host; run it elsewhere
+against the same database and storage.
 
 **⚠︎ A missing file is an archived file.** Sync soft-archives every file it can no
 longer find on disk, and archived rows are deleted after a grace period. A
@@ -393,7 +436,7 @@ substitute. Wholegrain only reads what it writes. Give it its own database role
 modelled on `app_worker`, and keep it on the same migration head as the API: the
 schema is the contract.
 
-### 14. Copying a workspace between servers (optional)
+### 15. Copying a workspace between servers (optional)
 
 The `mirror` module pulls one workspace from a source server into a workspace on
 a target server and keeps it current: folders, file metadata and documents,
@@ -537,9 +580,9 @@ only 1 CPUs available`. The API and database modules take theirs from env
   will not complete reliably without it.
 - Retune Postgres — the defaults assume ~8 GB. See `database/.env.example`.
 - Set `API_CPUS` to at most the host's core count.
-- The pipeline image (Docling, LibreOffice, baked models) will not fit. Run
-  extraction elsewhere — on a bigger box against the same database and storage,
-  or as an external document service.
+- Document extraction (Docling, LibreOffice, OCR models) will not fit. Run it
+  elsewhere — on a bigger box against the same database and storage, or as a
+  managed job.
 
 Build images one at a time. Two concurrent builds on a small host is a known way
 to take the whole box down.
